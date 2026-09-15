@@ -1,94 +1,32 @@
-name: Build APK (depuis QrStream.zip)
+name: Compiler l'APK
 
 on:
   push:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
     steps:
-      - name: Récupérer le dépôt
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Dézipper le projet
-        run: |
-          set -e
-          SRC="$RUNNER_TEMP/src"
-          mkdir -p "$SRC"
+      - name: Extraire le projet
+        run: unzip -q QrStream.zip
 
-          # 1) cherche un .zip du dépôt qui contient un projet Gradle
-          ZIP=""
-          while IFS= read -r z; do
-            if unzip -l "$z" | grep -q "settings.gradle.kts"; then ZIP="$z"; break; fi
-          done < <(find . -type f -iname "*.zip" -not -path "./.git/*")
-
-          if [ -n "$ZIP" ]; then
-            echo "Zip trouvé : $ZIP"
-            unzip -q -o "$ZIP" -d "$SRC"
-          else
-            echo "Aucun zip : utilisation des fichiers du dépôt"
-            cp -r . "$SRC/"
-          fi
-
-          # 2) localise le dossier racine du projet (celui qui contient settings.gradle.kts)
-          ROOT=$(dirname "$(find "$SRC" -name settings.gradle.kts -not -path "*/build/*" | head -n1)")
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/app/build.gradle.kts" ]; then
-            echo "::error::Projet introuvable (settings.gradle.kts + app/build.gradle.kts)"
-            find "$SRC" -maxdepth 3 | head -50
-            exit 1
-          fi
-          echo "Projet : $ROOT"
-          echo "PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
-          ls -la "$ROOT"
-
-      - name: Installer JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Installer le SDK Android
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
 
-      - name: Installer Gradle 8.14.3
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.14.3'
-
-      - name: Compiler l'APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: gradle --no-daemon --stacktrace assembleDebug assembleRelease
-
-      - name: Rassembler les APK
+      - name: Compiler
+        working-directory: QrStream
         run: |
-          mkdir -p dist
-          find "$PROJECT_DIR/app/build/outputs/apk" -name "*.apk" -exec cp {} dist/ \;
-          cd dist
-          for f in *.apk; do mv "$f" "QrStream-${{ github.run_number }}-$f"; done
-          ls -lh
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
 
-      - name: Rapports (si échec)
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: rapports-erreur
-          path: ${{ env.PROJECT_DIR }}/app/build/reports/
-          if-no-files-found: ignore
-
-      - name: Publier les APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: QrStream-apk-${{ github.run_number }}
-          path: dist/*.apk
-
-      - name: Release GitHub (si tag v*)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.apk
+          name: qrstream-debug
+          path: QrStream/app/build/outputs/apk/debug/app-debug.apk
