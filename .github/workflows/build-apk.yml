@@ -1,32 +1,83 @@
-name: Compiler l'APK
+name: Build APK
 
 on:
   push:
+    branches: ["**"]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Extraire le projet
-        run: unzip -q QrStream.zip
+        run: |
+          set -e
+          shopt -s nullglob
+          zips=(*.zip)
 
-      - uses: actions/setup-java@v4
+          if [ ${#zips[@]} -gt 0 ]; then
+            archive="${zips[0]}"
+            echo "Archive detectee : $archive"
+            rm -rf .extract && mkdir .extract
+            unzip -oq "$archive" -d .extract
+
+            # cas 1 : le projet est a la racine de l'archive
+            if [ -f .extract/settings.gradle.kts ]; then
+              src=".extract"
+            else
+              # cas 2 : l'archive contient un dossier unique
+              src=$(find .extract -maxdepth 2 -name settings.gradle.kts -print -quit)
+              src=$(dirname "$src" 2>/dev/null || true)
+            fi
+
+            if [ -z "$src" ] || [ ! -f "$src/settings.gradle.kts" ]; then
+              echo "::error::settings.gradle.kts introuvable dans $archive"
+              exit 1
+            fi
+
+            cp -rf "$src"/. .
+            rm -rf .extract
+          fi
+
+          if [ ! -f settings.gradle.kts ]; then
+            echo "::error::Aucun projet Gradle trouve. Depose le ZIP a la racine du depot."
+            exit 1
+          fi
+          echo "Projet pret :"
+          ls -la
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Compiler
-        working-directory: QrStream
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - uses: actions/upload-artifact@v4
+      - name: Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
         with:
-          name: qrstream-debug
-          path: QrStream/app/build/outputs/apk/debug/app-debug.apk
+          gradle-version: '8.7'
+
+      - name: Compiler l'APK debug
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Publier l'APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: qrstream-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Tests unitaires FSRS
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Rapports en cas d'echec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapports
+          path: app/build/reports/
+          if-no-files-found: ignore
